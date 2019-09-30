@@ -1,5 +1,11 @@
-#include <LiquidCrystal_I2C.h>
 #include <Wire.h>
+
+// #include <LiquidCrystal_I2C.h>
+
+#include <hd44780.h>
+#include <hd44780ioClass/hd44780_I2Cexp.h>
+
+
 #include <Servo.h>
 #include <EEPROM.h>
 #include <NeoSWSerial.h>
@@ -20,6 +26,11 @@
    0x13 servo position
    0x14 servo tap
 */
+
+
+// LiquidCrystal_I2C lcd(0x27, 20, 4);
+hd44780_I2Cexp lcd(0x27, 20, 4);
+
 
 const int PIN_SERVO = 2;
 
@@ -49,8 +60,6 @@ const int PIN_POT_DELAY = A2;
 const int PIN_POT_REST = A3;
 
 
-LiquidCrystal_I2C lcd(0x27, 20, 4);
-
 NeoSWSerial midiSerial(PIN_MIDI_RX, PIN_MIDI_TX); // Rx/Tx
 
 NeoSWSerial configSerial(PIN_CONFIG_RX, PIN_CONFIG_TX); // rx/tx
@@ -79,6 +88,10 @@ unsigned long lastPotMillis = 0;
 const int POT_DURATION_MILLIS = 50;
 
 unsigned long lastLoopMillis = 0;
+
+unsigned long loopBlinkMillis = 0;
+const int LOOP_BLINK_DURATION_MILLIS = 150;
+
 
 const int EEPROM_ADDR_START = 20;
 
@@ -171,7 +184,6 @@ void displaySpin() {
   clearSpin();
 
   if (sysMode == SYSMODE_SPIN) {
-    //displayFourDigits(potPosUtil, 0, 2);
     displayFourDigits(mapServoPot(potPosUtil), 0, 3);
   }
 }
@@ -180,44 +192,53 @@ void clearLoop() {
   clearSlam();
 }
 
-void displayLoop() {
-  clearLoop();
+void displayLoop(boolean fullWipe = true) {
+  if (fullWipe) {
+    clearLoop();
+  }
 
   if (sysMode == SYSMODE_LOOP) {
 
-    //displayFourDigits(potPosUtil, 0, 2);
-    displayFourDigits(mapTempoPot(potPosUtil), 0, 3);
+    if (fullWipe || mapTempoPot(potPosUtil) != mapTempoPot(potPrevUtil)) {
+      displayFourDigits(mapTempoPot(potPosUtil), 0, 3);
+    }
 
-    //displayFourDigits(potPosStrike, 5, 2);
-    displayFourDigits(mapServoPot(potPosStrike), 5, 3);
+    if (fullWipe || mapServoPot(potPosStrike) != mapServoPot(potPrevStrike)) {
+      displayFourDigits(mapServoPot(potPosStrike), 5, 3);
+    }
 
-    //displayFourDigits(potPosDelay, 10, 2);
-    displayFourDigits(mapDelayPot(potPosDelay), 10, 3);
+    if (fullWipe || mapDelayPot(potPosDelay) != mapDelayPot(potPrevDelay)) {
+      displayFourDigits(mapDelayPot(potPosDelay), 10, 3);
+    }
 
-    //displayFourDigits(potPosRest, 15, 2);
-    displayFourDigits(mapServoPot(potPosRest), 15, 3);
+    if (fullWipe || mapDelayPot(potPosRest) != mapDelayPot(potPrevRest)) {
+      displayFourDigits(mapServoPot(potPosRest), 15, 3);
+    }
   }
 }
 
 void clearSlam() {
-  //lcd.setCursor(0, 2);
-  //lcd.print(F("                    "));
   lcd.setCursor(0, 3);
   lcd.print(F("                    "));
 }
 
-void displaySlam() {
-  clearSlam();
+void displaySlam(boolean fullWipe = true) {
+  if (fullWipe) {
+    clearSlam();
+  }
 
   if (sysMode == SYSMODE_SLAM) {
-    //displayFourDigits(potPosStrike, 5, 2);
-    displayFourDigits(mapServoPot(potPosStrike), 5, 3);
+    if (fullWipe || potPosStrike != potPrevStrike) {
+      displayFourDigits(mapServoPot(potPosStrike), 5, 3);
+    }
 
-    //displayFourDigits(potPosDelay, 10, 2);
-    displayFourDigits(mapDelayPot(potPosDelay), 10, 3);
+    if (fullWipe || potPosDelay != potPrevDelay) {
+      displayFourDigits(mapDelayPot(potPosDelay), 10, 3);
+    }
 
-    //displayFourDigits(potPosRest, 15, 2);
-    displayFourDigits(mapServoPot(potPosRest), 15, 3);
+    if (fullWipe || potPosRest != potPrevRest) {
+      displayFourDigits(mapServoPot(potPosRest), 15, 3);
+    }
   }
 }
 
@@ -243,6 +264,8 @@ void displayAction(const char* action = "    ") {
 }
 
 void displayFourDigits(uint16_t val, uint8_t col, uint8_t row) {
+  lcd.setCursor(col, row);
+  lcd.print(F("    "));
   lcd.setCursor(col, row);
   lcd.print(val);
 }
@@ -521,6 +544,22 @@ void setMotor(int8_t newIndex) {
 }
 
 
+void sendSysEx14() {
+  // uint8_t deviceId, uint8_t modelId, uint8_t instructionId, const byte* rawData, uint8_t rawLen
+  const uint8_t sysExLen = 5;
+  uint16_t delayVal = mapDelayPot(potPosDelay);
+  byte sysExData[sysExLen] = { motorIndex, mapServoPot(potPosStrike), highByte(delayVal), lowByte(delayVal), mapServoPot(potPosRest) };
+  midiOut.sendSysEx(getDeviceID(), getModelID(), 0x14, sysExData, sysExLen);
+}
+
+void sendSysEx13() {
+  // uint8_t deviceId, uint8_t modelId, uint8_t instructionId, const byte* rawData, uint8_t rawLen
+  const uint8_t sysExLen = 2;
+  byte sysExData[sysExLen] = { motorIndex, mapServoPot(potPosUtil) };
+  midiOut.sendSysEx(getDeviceID(), getModelID(), 0x13, sysExData, sysExLen);
+}
+
+
 /*************************************************************
    setup()
  *************************************************************/
@@ -557,20 +596,6 @@ void setup() {
   setDevice(0);
 }
 
-void sendSysEx14() {
-  // uint8_t deviceId, uint8_t modelId, uint8_t instructionId, const byte* rawData, uint8_t rawLen
-  const uint8_t sysExLen = 5;
-  uint16_t delayVal = mapDelayPot(potPosDelay);
-  byte sysExData[sysExLen] = { motorIndex, mapServoPot(potPosStrike), highByte(delayVal), lowByte(delayVal), mapServoPot(potPosRest) };
-  midiOut.sendSysEx(getDeviceID(), getModelID(), 0x14, sysExData, sysExLen);
-}
-
-void sendSysEx13() {
-  // uint8_t deviceId, uint8_t modelId, uint8_t instructionId, const byte* rawData, uint8_t rawLen
-  const uint8_t sysExLen = 2;
-  byte sysExData[sysExLen] = { motorIndex, mapServoPot(potPosUtil) };
-  midiOut.sendSysEx(getDeviceID(), getModelID(), 0x13, sysExData, sysExLen);
-}
 
 
 
@@ -848,12 +873,6 @@ void loop() {
 
 
 
-
-
-
-
-
-
   if (sysMode == SYSMODE_SLAM || sysMode == SYSMODE_LOOP) {
     if ((nowMillis - lastServoMillis) > SERVO_DURATION_MILLIS) {
       lastServoMillis = nowMillis;
@@ -863,14 +882,11 @@ void loop() {
       uint8_t mappedRestVal = mapServoPot(potPosRest);
       uint16_t mappedTempoVal = mapTempoPot(potPosUtil);
 
-      if (mappedStrikeVal != mapServoPot(potPrevStrike) || mappedDelayVal != mapDelayPot(potPrevDelay) || mappedRestVal != mapServoPot(potPrevRest) || (sysMode == SYSMODE_LOOP && mappedTempoVal != mapTempoPot(potPrevUtil))) {
-        if (sysMode == SYSMODE_SLAM) {
-          displaySlam();
-        } else {
-          displayLoop();
-        }
+      if (sysMode == SYSMODE_SLAM) {
+        displaySlam(false);
+      } else {
+        displayLoop(false);
       }
-
     }
 
   } else if (sysMode == SYSMODE_KNOB || sysMode == SYSMODE_SPIN) {
@@ -899,12 +915,29 @@ void loop() {
   }
 
 
-  if (sysMode == SYSMODE_LOOP && sysArmed) {
-    // UTIL has a BPM value.  How many millis between notes?
-    if ((nowMillis - lastLoopMillis) >= (60000 / mapTempoPot(potPosUtil))) {
-      lastLoopMillis = nowMillis;
-      sendSysEx14();
+  if (sysMode == SYSMODE_LOOP) {
+
+    if ((loopBlinkMillis > 0) && ((nowMillis - loopBlinkMillis) >= LOOP_BLINK_DURATION_MILLIS)) {
+      loopBlinkMillis = 0;
+      lcd.setCursor(19, 3);
+      lcd.print(F(" "));
     }
+
+
+    if (sysArmed) {
+      // UTIL has a BPM value.  How many millis between notes?
+      if ((nowMillis - lastLoopMillis) >= (60000 / mapTempoPot(potPosUtil))) {
+        lastLoopMillis = nowMillis;
+
+
+        lcd.setCursor(19, 3);
+        lcd.print(F("X"));
+        loopBlinkMillis = nowMillis;
+
+        sendSysEx14();
+      }
+    }
+
   }
 
 
